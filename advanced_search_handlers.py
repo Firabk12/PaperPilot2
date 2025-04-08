@@ -20,6 +20,7 @@ def initialize_filters(context: CallbackContext) -> None:
             'categories': []
         }
 
+
 def show_advanced_search_menu(update: Update, context: CallbackContext, execute_search_func=None) -> int:
     """Show advanced search filters menu"""
     logger.info("Showing advanced search menu")
@@ -55,7 +56,7 @@ def show_advanced_search_menu(update: Update, context: CallbackContext, execute_
                 InlineKeyboardButton("🔖 Categories", callback_data="filter_categories")
             ],
             [
-                InlineKeyboardButton("🔍 Execute Search", callback_data="filter_execute"),
+                InlineKeyboardButton("🔍 Execute Search", callback_data="execute_search"),
                 InlineKeyboardButton("« Back", callback_data="back_to_search_options")
             ]
         ]
@@ -143,11 +144,11 @@ def handle_filter_selection(update: Update, context: CallbackContext) -> int:
         if query.data == "filter_date":
             keyboard = [
                 [
-                    InlineKeyboardButton("Last Week", callback_data="date_last_week"),
-                    InlineKeyboardButton("Last Month", callback_data="date_last_month")
+                    InlineKeyboardButton("Last Week", callback_data="date_week"),
+                    InlineKeyboardButton("Last Month", callback_data="date_month")
                 ],
                 [
-                    InlineKeyboardButton("Last Year", callback_data="date_last_year"),
+                    InlineKeyboardButton("Last Year", callback_data="date_year"),
                     InlineKeyboardButton("Custom", callback_data="date_custom")
                 ],
                 [InlineKeyboardButton("« Back", callback_data="back_to_filters")]
@@ -160,7 +161,7 @@ def handle_filter_selection(update: Update, context: CallbackContext) -> int:
                 current_filter = f"\nCurrent: {context.user_data['advanced_filters']['date_from']} to {context.user_data['advanced_filters']['date_to']}"
 
             query.edit_message_text(
-                f"*Select Date Range* 📅\n{current_filter}\n\n"
+                f"*Select Date Range* 📅{current_filter}\n\n"
                 "Choose a predefined range or select 'Custom' to enter specific dates.",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
@@ -187,78 +188,70 @@ def handle_filter_selection(update: Update, context: CallbackContext) -> int:
             )
             return ENTER_AUTHOR
 
-
-        elif query.data == "filter_citations":
-            logger.info("Showing citations options")
-            keyboard = [
-                [
-                    InlineKeyboardButton("≥ 10", callback_data="citations_10"),
-                    InlineKeyboardButton("≥ 50", callback_data="citations_50"),
-                    InlineKeyboardButton("≥ 100", callback_data="citations_100")
-                ],
-                [InlineKeyboardButton("« Back", callback_data="back_to_filters")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            query.edit_message_text(
-                "*Select Minimum Citations* 📊\n\n"
-                "Choose the minimum number of citations required.",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return ENTER_MIN_CITATIONS
-
         elif query.data == "filter_categories":
             logger.info("Showing categories options")
+            # Get current selected categories
+            current_categories = context.user_data['advanced_filters'].get('categories', [])
+
             keyboard = [
                 [
-                    InlineKeyboardButton("Physics", callback_data="category_physics"),
-                    InlineKeyboardButton("CS", callback_data="category_cs")
+                    InlineKeyboardButton(
+                        f"{'✅' if 'physics' in current_categories else '⭕️'} Physics",
+                        callback_data="adv_cat_physics"  # New pattern
+                    ),
+                    InlineKeyboardButton(
+                        f"{'✅' if 'cs' in current_categories else '⭕️'} CS",
+                        callback_data="adv_cat_cs"  # New pattern
+                    )
                 ],
                 [
-                    InlineKeyboardButton("Math", callback_data="category_math"),
-                    InlineKeyboardButton("Biology", callback_data="category_biology")
+                    InlineKeyboardButton(
+                        f"{'✅' if 'math' in current_categories else '⭕️'} Math",
+                        callback_data="adv_cat_math"  # New pattern
+                ),
+                    InlineKeyboardButton(
+                        f"{'✅' if 'biology' in current_categories else '⭕️'} Biology",
+                        callback_data="adv_cat_biology"  # New pattern
+                )
                 ],
                 [InlineKeyboardButton("« Back", callback_data="back_to_filters")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            query.edit_message_text(
+            selected_cats = ", ".join(current_categories) if current_categories else "None selected"
+            message = (
                 "*Select Categories* 🔖\n\n"
-                "Choose one or more research categories:",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
+                f"Currently selected: {selected_cats}\n\n"
+                "Click on a category to toggle selection:\n"
+                "✅ = Selected\n"
+                "⭕️ = Not Selected"
             )
-            return CHOOSING_FILTER
 
-        else:
-            logger.warning(f"Unexpected callback data: {query.data}")
+            query.edit_message_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+            )
             return CHOOSING_FILTER
 
     except Exception as e:
         logger.error(f"Error in filter selection: {str(e)}", exc_info=True)
-        try:
-            query.edit_message_text(
-                "❌ An error occurred. Please try again.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("« Back", callback_data="back_to_filters")
-                ]]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e2:
-            logger.error(f"Error sending error message: {str(e2)}")
 
-        return CHOOSING_FILTER
 
-def handle_category_selection(update: Update, context: CallbackContext) -> int:
-    """Handle category selection"""
+def handle_advanced_category_toggle(update: Update, context: CallbackContext) -> int:
+    """Handle category toggle for advanced search."""
     query = update.callback_query
     query.answer()
+    logger.info(f"Advanced search category toggle received: {query.data}")
 
     try:
-        category = query.data.split('_')[1]
+        # Initialize filters if needed
         initialize_filters(context)
 
+        # Get category from callback data (format: adv_cat_<name>)
+        category = query.data.split('_')[2]  # Get the category name
+
+        # Initialize categories list if not exists
         if 'categories' not in context.user_data['advanced_filters']:
             context.user_data['advanced_filters']['categories'] = []
 
@@ -267,41 +260,51 @@ def handle_category_selection(update: Update, context: CallbackContext) -> int:
         # Toggle category
         if category in categories:
             categories.remove(category)
-            query.answer(f"Removed {category}")
+            feedback = f"❌ Removed {category}"
         else:
             categories.append(category)
-            query.answer(f"Added {category}")
+            feedback = f"✅ Added {category}"
 
-        # Update the menu with current selections
+        query.answer(feedback, show_alert=True)
+
+        # Rebuild keyboard with updated selection states
         keyboard = [
             [
                 InlineKeyboardButton(
                     f"{'✅' if 'physics' in categories else '⭕️'} Physics",
-                    callback_data="category_physics"
+                    callback_data="adv_cat_physics"
                 ),
                 InlineKeyboardButton(
                     f"{'✅' if 'cs' in categories else '⭕️'} CS",
-                    callback_data="category_cs"
+                    callback_data="adv_cat_cs"
                 )
             ],
             [
                 InlineKeyboardButton(
                     f"{'✅' if 'math' in categories else '⭕️'} Math",
-                    callback_data="category_math"
+                    callback_data="adv_cat_math"
                 ),
                 InlineKeyboardButton(
                     f"{'✅' if 'biology' in categories else '⭕️'} Biology",
-                    callback_data="category_biology"
+                    callback_data="adv_cat_biology"
                 )
             ],
             [InlineKeyboardButton("« Back", callback_data="back_to_filters")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        query.edit_message_text(
+        # Update message with current selection
+        selected_cats = ", ".join(categories) if categories else "None selected"
+        message = (
             "*Select Categories* 🔖\n\n"
-            f"Selected categories:\n{', '.join(categories) if categories else 'None'}\n\n"
-            "Click to toggle categories:",
+            f"Currently selected: {selected_cats}\n\n"
+            "Click on a category to toggle selection:\n"
+            "✅ = Selected\n"
+            "⭕️ = Not Selected"
+        )
+
+        query.edit_message_text(
+            message,
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -309,7 +312,8 @@ def handle_category_selection(update: Update, context: CallbackContext) -> int:
         return CHOOSING_FILTER
 
     except Exception as e:
-        logger.error(f"Error in category selection: {str(e)}")
+        logger.error(f"Error in advanced category toggle: {str(e)}")
+        query.answer("❌ An error occurred", show_alert=True)
         return CHOOSING_FILTER
 
 def handle_date_input(update: Update, context: CallbackContext) -> int:
@@ -319,32 +323,31 @@ def handle_date_input(update: Update, context: CallbackContext) -> int:
     logger.info(f"Processing date input: {query.data}")
 
     try:
-        initialize_filters(context)
+        initialize_filters(context)  # Make sure filters are initialized
 
         if not query.data.startswith("date_"):
             return CHOOSING_FILTER
 
-        option = query.data.split("_")[1]
-        end_date = datetime.utcnow()
+        option = query.data.split("_")[1]  # Will now get 'week', 'month', 'year', or 'custom'
+        end_date = datetime.utcnow()  # Current date/time
 
         # Handle different date range options
-        if option in ["last_week", "last_month", "last_year"]:
-            if option == "last_week":
+        if option in ["week", "month", "year"]:
+            if option == "week":
                 start_date = end_date - timedelta(days=7)
-                date_description = "Last 7 days"
-            elif option == "last_month":
+                date_description = "Last Week"
+            elif option == "month":
                 start_date = end_date - timedelta(days=30)
-                date_description = "Last 30 days"
-            else:  # last_year
+                date_description = "Last Month"
+            else:  # year
                 start_date = end_date - timedelta(days=365)
-                date_description = "Last year"
+                date_description = "Last Year"
 
-            # Store the dates
+            # Store the dates in proper format
             context.user_data['advanced_filters']['date_from'] = start_date.strftime('%Y-%m-%d')
             context.user_data['advanced_filters']['date_to'] = end_date.strftime('%Y-%m-%d')
 
-            # Show confirmation and return to main menu
-            query.answer(f"Date range set to {date_description}", show_alert=True)
+            # Show success message and return to main menu
             return show_advanced_search_menu(update, context)
 
         elif option == "custom":
@@ -358,8 +361,10 @@ def handle_date_input(update: Update, context: CallbackContext) -> int:
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
+            # Set proper flags
             context.user_data['awaiting_custom_date'] = True
-            context.user_data['awaiting_date_start'] = True  # Add this flag
+            context.user_data['advanced_filters']['date_from'] = None
+            context.user_data['advanced_filters']['date_to'] = None
             return ENTER_DATE_FROM
 
         return CHOOSING_FILTER
@@ -375,76 +380,52 @@ def handle_date_input(update: Update, context: CallbackContext) -> int:
         )
         return CHOOSING_FILTER
 
+
 def handle_custom_date_message(update: Update, context: CallbackContext) -> int:
-    """Handle custom date input messages"""
-    logger.info("Handling custom date message")  # Add logging
-
+    """Handle custom date input"""
     try:
-        if not context.user_data.get('awaiting_custom_date'):
-            logger.info("Not awaiting custom date")
-            return CHOOSING_FILTER
+        input_date = update.message.text.strip()
+        # Validate date format
+        datetime.strptime(input_date, '%Y-%m-%d')
 
-        date_text = update.message.text.strip()
-        logger.info(f"Received date text: {date_text}")
+        if 'awaiting_date_to' in context.user_data:
+            context.user_data['advanced_filters']['date_to'] = input_date
+            del context.user_data['awaiting_date_to']
 
-        # Initialize filters if needed
-        initialize_filters(context)
-
-        try:
-            input_date = datetime.strptime(date_text, '%Y-%m-%d')
-        except ValueError:
+            # Show success message with both dates
+            date_from = context.user_data['advanced_filters']['date_from']
             update.message.reply_text(
-                "❌ Invalid date format! Please use YYYY-MM-DD format.\n"
-                "Example: 2024-01-01",
-                parse_mode=ParseMode.MARKDOWN
+                f"✅ Date range set: {date_from} to {input_date}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("« Back to Filters", callback_data="back_to_filters")
+                ]])
             )
-            return ENTER_DATE_FROM if 'date_from' not in context.user_data['advanced_filters'] else ENTER_DATE_TO
-
-        # Handle start date
-        if 'date_from' not in context.user_data['advanced_filters']:
-            context.user_data['advanced_filters']['date_from'] = date_text
-
-            # Ask for end date
-            keyboard = [[InlineKeyboardButton("« Back", callback_data="back_to_filters")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            return CHOOSING_FILTER
+        else:
+            context.user_data['advanced_filters']['date_from'] = input_date
+            context.user_data['awaiting_date_to'] = True
 
             update.message.reply_text(
                 "*Enter End Date* 📅\n\n"
                 "Please enter the end date in YYYY-MM-DD format:\n"
-                "Example: `2024-12-31`",
-                reply_markup=reply_markup,
+                "Example: `2024-01-31`",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("« Back", callback_data="back_to_filters")
+                ]]),
                 parse_mode=ParseMode.MARKDOWN
             )
             return ENTER_DATE_TO
 
-        # Handle end date
-        else:
-            start_date = datetime.strptime(context.user_data['advanced_filters']['date_from'], '%Y-%m-%d')
-            if input_date < start_date:
-                update.message.reply_text(
-                    "❌ End date must be after start date!",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return ENTER_DATE_TO
-
-            context.user_data['advanced_filters']['date_to'] = date_text
-            context.user_data['awaiting_custom_date'] = False  # Clear the flag
-
-            update.message.reply_text(
-                f"✅ Date range set: {context.user_data['advanced_filters']['date_from']} "
-                f"to {date_text}"
-            )
-
-            # Return to main menu
-            return show_advanced_search_menu(update, context)
-
-    except Exception as e:
-        logger.error(f"Error in handle_custom_date_message: {str(e)}", exc_info=True)
+    except ValueError:
         update.message.reply_text(
-            "❌ An error occurred. Please try again.",
-            parse_mode=ParseMode.MARKDOWN
+            "❌ Invalid date format! Please use YYYY-MM-DD format.\n"
+            "Example: 2024-01-01",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Back", callback_data="back_to_filters")
+            ]])
         )
-        return CHOOSING_FILTER
+        return ENTER_DATE_FROM if 'awaiting_date_to' not in context.user_data else ENTER_DATE_TO
+
 
 def handle_author_input(update: Update, context: CallbackContext) -> int:
     """Handle author input (both buttons and text)"""
@@ -481,7 +462,6 @@ def handle_author_input(update: Update, context: CallbackContext) -> int:
             context.user_data['advanced_filters']['author'] = author
             context.user_data['awaiting_author'] = False
 
-            update.message.reply_text(f"✅ Author filter set: {author}")
             return show_advanced_search_menu(update, context)
 
         return CHOOSING_FILTER
@@ -525,11 +505,10 @@ def handle_citations_input(update: Update, context: CallbackContext) -> int:
 
     return CHOOSING_FILTER
 
-
 def handle_filter_execute(update: Update, context: CallbackContext) -> int:
     """Execute search with advanced filters"""
     query = update.callback_query
-    query.answer()
+    query.answer("🔍 Processing your search...")
     logger.info("Executing advanced search with filters")
 
     try:
@@ -538,18 +517,23 @@ def handle_filter_execute(update: Update, context: CallbackContext) -> int:
 
         # Build search query from filters
         if filters.get('date_from') and filters.get('date_to'):
-            search_parts.append(f"submittedDate:[{filters['date_from']} TO {filters['date_to']}]")
+            # Convert dates from YYYY-MM-DD to YYYYMMDD format
+            date_from = filters['date_from'].replace('-', '')
+            date_to = filters['date_to'].replace('-', '')
+            search_parts.append(f"submittedDate:[{date_from} TO {date_to}]")
 
         if filters.get('author'):
-            author_type = context.user_data.get('author_type', 'exact')
-            author = filters['author']
-            if author_type == 'last':
-                search_parts.append(f"au:*{author}")
-            else:
-                search_parts.append(f"au:\"{author}\"")
+            # Properly format author name with quotes and exact matching
+            author = filters['author'].strip()
+            search_parts.append(f'au:"{author}"')
+
+        if filters.get('min_citations'):
+            min_cites = filters['min_citations']
+            search_parts.append(f"citations:>={min_cites}")
 
         if filters.get('categories'):
-            cats = ' OR '.join(f"cat:{cat}" for cat in filters['categories'])
+            # Join categories with OR and proper category prefix
+            cats = ' OR '.join(f"cat:{cat.lower()}" for cat in filters['categories'])
             if cats:
                 search_parts.append(f"({cats})")
 
@@ -557,27 +541,43 @@ def handle_filter_execute(update: Update, context: CallbackContext) -> int:
             query.edit_message_text(
                 "❌ Please set at least one filter before searching!\n\n"
                 "Use the buttons below to set your search filters.",
-                reply_markup=query.message.reply_markup,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("« Back", callback_data="back_to_filters")
+                ]]),
                 parse_mode=ParseMode.MARKDOWN
             )
             return CHOOSING_FILTER
 
         # Build the final query
-        search_query = ' AND '.join(f"({part})" for part in search_parts)
+        search_query = ' AND '.join(search_parts)  # Removed extra parentheses
 
-        # Store the query for execute_search function
-        context.user_data['search_query'] = search_query
+        # Show processing message with all active filters
+        filter_summary = []
+        if filters.get('date_from') and filters.get('date_to'):
+            filter_summary.append(f"📅 Date: {filters['date_from']} to {filters['date_to']}")
+        if filters.get('author'):
+            filter_summary.append(f"👤 Author: {filters['author']}")
+        if filters.get('min_citations'):
+            filter_summary.append(f"📊 Min Citations: {filters['min_citations']}")
+        if filters.get('categories'):
+            filter_summary.append(f"🔖 Categories: {', '.join(filters['categories'])}")
 
         query.edit_message_text(
-            "🔍 Searching with advanced filters...\n\n"
-            f"Query: {search_query}",
+            f"🔍 *Processing Advanced Search*\n\n"
+            f"*Active Filters:*\n" + "\n".join(filter_summary) + "\n\n"
+            f"Query: `{search_query}`\n\n"
+            "Please wait...",
             parse_mode=ParseMode.MARKDOWN
         )
 
-        # Create a new update object with the search query
+        # Import the execute_search function
+        from arXiv import execute_search
+
+        # Create a new update object for execute_search
         new_update = Update(update.update_id)
-        new_update.message = update.effective_message
-        context.args = search_query.split()
+        new_update.message = query.message
+        context.user_data['last_search_query'] = search_query  # Store the query
+        context.args = [search_query]  # Pass as a single argument
 
         # Execute the search
         execute_search(new_update, context)
@@ -585,9 +585,13 @@ def handle_filter_execute(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"Error executing search: {str(e)}")
+        logger.error(f"Error executing search: {str(e)}", exc_info=True)
         query.edit_message_text(
-            "❌ An error occurred while searching. Please try again.",
+            "❌ An error occurred while searching.\n"
+            "Please try again or modify your filters.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("« Back", callback_data="back_to_filters")
+            ]]),
             parse_mode=ParseMode.MARKDOWN
         )
         return ConversationHandler.END

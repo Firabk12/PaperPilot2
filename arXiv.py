@@ -23,6 +23,7 @@ from advanced_search_handlers import (
     handle_citations_input,
     handle_filter_execute,
     handle_custom_date_message,
+    handle_advanced_category_toggle,
     cancel_search,
     CHOOSING_FILTER,
     ENTER_DATE_FROM,
@@ -31,6 +32,7 @@ from advanced_search_handlers import (
     ENTER_MIN_CITATIONS,
     SAVE_FILTER
 )
+from chat_handler import ChatHandler
 import telegram
 from typing import Dict, List, Optional
 from telegram.error import TimedOut, NetworkError, BadRequest
@@ -48,6 +50,7 @@ from dotenv import load_dotenv
 import time
 import random
 import json
+from admin_handler import AdminManager
 
 # Load environment variables
 load_dotenv()
@@ -185,7 +188,7 @@ class UserSession:
         self.papers_to_compare = []
         self.last_activity = datetime.utcnow()
         self.comparison_count = 0
-        self.daily_limit = 10  # Maximum comparisons per day
+        self.daily_limit = 10
 
     def can_compare(self) -> bool:
         """Check if user hasn't exceeded daily comparison limit."""
@@ -322,6 +325,212 @@ def about_command(update: Update, context: CallbackContext) -> None:
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=reply_markup,
         disable_web_page_preview=True
+    )
+
+@subscription_required
+def admin_command(update: Update, context: CallbackContext) -> None:
+    """Handle the /admin command."""
+    admin_manager = context.bot_data['admin_manager']
+    admin_manager.show_admin_panel(update, context)
+
+def handle_admin_callback(update: Update, context: CallbackContext) -> None:
+    """Handle admin panel callback queries."""
+    query = update.callback_query
+    admin_manager = context.bot_data['admin_manager']
+
+    if query.data == "admin_panel":
+        admin_manager.show_admin_panel(update, context)
+    elif query.data == "admin_stats":
+        admin_manager.handle_stats(update, context)
+    elif query.data == "admin_users":
+        admin_manager.handle_users(update, context)
+    elif query.data == "admin_restrictions":
+        admin_manager.handle_restrictions(update, context)
+    elif query.data == "admin_admins":
+        admin_manager.handle_admin_management(update, context)
+    elif query.data == "admin_broadcast":
+        admin_manager.handle_broadcast(update, context)
+    elif query.data.startswith("restrict_"):
+        admin_manager.handle_restriction_action(update, context)
+    elif query.data.startswith("admin_"):
+        admin_manager.handle_admin_action(update, context)
+    elif query.data.startswith("users_"):
+        admin_manager.handle_user_navigation(update, context)
+    elif query.data.startswith("broadcast_"):
+        # Handle broadcast-related callbacks
+        if query.data.startswith("broadcast_target_"):
+            admin_manager.handle_broadcast_target(update, context)
+        elif query.data.startswith("broadcast_select_"):
+            admin_manager.handle_user_selection(update, context)
+        elif query.data.startswith("broadcast_type_"):
+            context.user_data['broadcast_type'] = query.data.split('_')[2]
+            query.edit_message_text(
+                text="📢 Please send your broadcast message now (text, photo, video, or document).\n"
+                     "Send /cancel to abort the broadcast.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        elif query.data.startswith("broadcast_users_"):
+            action = query.data.split('_')[2]
+            if action in ['prev', 'next']:
+                context.user_data['broadcast_user_page'] = context.user_data.get('broadcast_user_page', 0) + (1 if action == 'next' else -1)
+                admin_manager.show_user_selection(update, context)
+
+    # Prevent "loading" animation from getting stuck
+    if not query.data.startswith("broadcast_select_"):
+        query.answer()
+
+def handle_restriction_input(update: Update, context: CallbackContext) -> None:
+    """Handle user input for restrictions."""
+    admin_manager = context.bot_data['admin_manager']
+    message = update.message.text
+
+    if context.user_data.get('expecting_restriction'):
+        try:
+            user_id, duration, *reason = message.split()
+            admin_manager.restrict_user(update, context, int(user_id), int(duration))
+            update.message.reply_text(f"✅ User {user_id} has been restricted for {duration} hours.")
+        except:
+            update.message.reply_text("❌ Invalid format. Please use: `username/ID duration_in_hours reason`")
+
+    elif context.user_data.get('expecting_block'):
+        try:
+            user_id, *reason = message.split()
+            admin_manager.block_user(update, context, int(user_id))
+            update.message.reply_text(f"⛔️ User {user_id} has been blocked.")
+        except:
+            update.message.reply_text("❌ Invalid format. Please use: `username/ID reason`")
+
+    elif context.user_data.get('expecting_unrestrict'):
+        try:
+            user_id = int(message.strip())
+            admin_manager.unblock_user(update, context, user_id)
+            update.message.reply_text(f"✅ User {user_id} has been unrestricted.")
+        except:
+            update.message.reply_text("❌ Invalid format. Please use: `username/ID`")
+
+    # Clear expectation flags
+    context.user_data.pop('expecting_restriction', None)
+    context.user_data.pop('expecting_block', None)
+    context.user_data.pop('expecting_unrestrict', None)
+
+@subscription_required
+def model_command(update: Update, context: CallbackContext) -> None:
+    """Show available AI models for paper summarization."""
+    keyboard = [
+        [InlineKeyboardButton("🌟 Gemini 1.5 Pro (Default) ✓", callback_data="model_gemini")],
+        [InlineKeyboardButton("🤖 GPT-4 Turbo", callback_data="model_gpt4")],
+        [InlineKeyboardButton("🧠 Claude 3 Opus", callback_data="model_claude3")],
+        [InlineKeyboardButton("⚡ PaLM 2", callback_data="model_palm2")],
+        [InlineKeyboardButton("🔮 Llama 2 70B", callback_data="model_llama2")],
+        [InlineKeyboardButton("🎯 Mistral Large", callback_data="model_mistral")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    message = """
+🤖 *AI Model Selection*
+
+Choose your preferred AI model for paper summarization:
+
+Current model: *Gemini 1.5 Pro* ✓
+
+Each model has its own strengths:
+• 🌟 *Gemini 1.5 Pro:* Balanced performance & efficiency
+• 🤖 *GPT-4 Turbo:* Advanced reasoning & analysis
+• 🧠 *Claude 3 Opus:* Detailed technical understanding
+• ⚡ *PaLM 2:* Fast & efficient summarization
+• 🔮 *Llama 2 70B:* Open-source powerhouse
+• 🎯 *Mistral Large:* Specialized in academic content
+
+_Note: Additional models coming soon!_
+"""
+
+    # Check if this is a callback query
+    if update.callback_query:
+        update.callback_query.answer()  # Answer the callback query
+        update.callback_query.edit_message_text(
+            text=message,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    else:
+        # This is a direct command
+        update.message.reply_text(
+            text=message,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+@subscription_required
+def chat_command(update: Update, context: CallbackContext) -> None:
+    """Start a chat session with PaperPilot."""
+    if 'chat_handler' not in context.bot_data:
+        context.bot_data['chat_handler'] = ChatHandler()
+    context.bot_data['chat_handler'].start_chat(update, context)
+
+def handle_chat_message(update: Update, context: CallbackContext) -> None:
+    """Handle messages in chat mode."""
+    if not check_channel_subscription(update, context):
+        return
+    if 'chat_handler' not in context.bot_data:
+        context.bot_data['chat_handler'] = ChatHandler()
+    context.bot_data['chat_handler'].handle_message(update, context, model)
+
+def end_chat_command(update: Update, context: CallbackContext) -> None:
+    """End the chat session."""
+    if not check_channel_subscription(update, context):
+        return
+    if 'chat_handler' not in context.bot_data:
+        context.bot_data['chat_handler'] = ChatHandler()
+    context.bot_data['chat_handler'].end_chat(update, context)
+
+def handle_model_selection(update: Update, context: CallbackContext) -> None:
+    """Handle model selection callback."""
+    query = update.callback_query
+    query.answer()
+
+    if not check_channel_subscription(update, context):
+        return
+
+    selected_model = query.data.split('_')[1]
+
+    # For now, show that only Gemini is available
+    if selected_model != 'gemini':
+        message = """
+⏳ *Model Not Yet Available*
+
+This model will be integrated soon! Currently using:
+🌟 *Gemini 1.5 Pro*
+
+Stay tuned for updates!
+"""
+        keyboard = [[InlineKeyboardButton("« Back to Model Selection", callback_data="back_to_models")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        query.edit_message_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # If Gemini is selected
+    message = """
+✅ *Model Selected: Gemini 1.5 Pro*
+
+Current active model for:
+• Paper summarization
+• Q&A responses
+• Comparative analysis
+
+Optimized for research paper understanding!
+"""
+    keyboard = [[InlineKeyboardButton("« Back to Model Selection", callback_data="back_to_models")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    query.edit_message_text(
+        message,
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
     )
 
 def create_paper_keyboard(paper_id: str) -> InlineKeyboardMarkup:
@@ -472,7 +681,7 @@ def handle_advanced_search_menu(update: Update, context: CallbackContext) -> int
             InlineKeyboardButton("🔖 Categories", callback_data="filter_categories")
         ],
         [
-            InlineKeyboardButton("🔍 Execute Search", callback_data="filter_execute"),
+            InlineKeyboardButton("🔍 Execute Search", callback_data="execute_search"),
             InlineKeyboardButton("« Back", callback_data="back_to_search_options")
         ]
     ]
@@ -736,7 +945,7 @@ Just type your question below and I'll answer based on the paper's content.
         logger.error(f"Summarization error: {str(e)}")
 
 def download_paper(update: Update, context: CallbackContext) -> None:
-    """Download and send paper as PDF."""
+    """Download and send paper as PDF using the most reliable method with pro UX."""
     query = update.callback_query
 
     if not check_channel_subscription(update, context):
@@ -745,41 +954,106 @@ def download_paper(update: Update, context: CallbackContext) -> None:
     paper_id = query.data.split('_')[1]
 
     try:
-        # Show downloading message
-        query.answer("📥 Downloading paper...")
+        # Show downloading message with cool animation
+        query.answer("📥 Initiating quantum paper download...")  # Fun user feedback
         loading_message = query.message.reply_text(
-            "⏳ Downloading PDF... Please wait..."
-        )
-
-        # Fetch paper
-        paper = next(arxiv.Search(id_list=[paper_id]).results())
-
-        # Get PDF content
-        response = requests.get(paper.pdf_url, stream=True)
-        pdf_content = BytesIO(response.content)
-
-        # Create a safe filename
-        safe_title = "".join(c for c in paper.title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-        filename = f"{safe_title[:50]}.pdf"
-
-        # Send the PDF
-        loading_message.delete()
-        query.message.reply_document(
-            document=pdf_content,
-            filename=filename,
-            caption=f"""
-📥 *Downloaded:* {paper.title}
-👥 Authors: {', '.join(str(author) for author in paper.authors[:3])} {'...' if len(paper.authors) > 3 else ''}
-📅 Published: {paper.published.strftime('%Y-%m-%d')}
-            """,
+            "🛸 *Beaming paper from arXiv servers...*\n"
+            "_This may take a few seconds..._",
             parse_mode=ParseMode.MARKDOWN
         )
 
+        # Fetch paper metadata (for title/authors later)
+        paper = next(arxiv.Search(id_list=[paper_id]).results())
+
+        # Method 2 (The Working Champion) - Export API
+        export_url = f"https://export.arxiv.org/pdf/{paper_id}"
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/pdf'
+        }
+
+        # Download with streaming
+        with requests.get(
+            export_url,
+            headers=headers,
+            stream=True,
+            timeout=30
+        ) as response:
+            response.raise_for_status()
+
+            # Verify it's actually a PDF
+            if 'application/pdf' not in response.headers.get('content-type', '').lower():
+                raise ValueError("Server returned non-PDF content")
+
+            # Create in-memory file with progress tracking
+            pdf_file = BytesIO()
+            total_size = int(response.headers.get('content-length', 0))
+            chunk_size = 8192
+            progress = 0
+
+            for chunk in response.iter_content(chunk_size):
+                if chunk:
+                    pdf_file.write(chunk)
+                    progress += len(chunk)
+
+                    # Update progress every 25%
+                    if total_size > 0 and int((progress / total_size) * 100) % 25 == 0:
+                        loading_message.edit_text(
+                            f"🚀 Downloading... {int((progress / total_size) * 100)}% complete\n"
+                            f"_File size: {total_size/1024/1024:.1f} MB_",
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+
+            pdf_file.seek(0)
+
+            # Create sexy filename
+            safe_title = "".join(
+                c for c in paper.title
+                if c.isalnum() or c in (' ', '-', '_')
+            ).rstrip()
+            filename = f"{safe_title[:45]}.pdf"  # Slightly shorter for mobile users
+
+            # Send that beautiful PDF with style
+            loading_message.delete()
+            query.message.reply_document(
+                document=pdf_file,
+                filename=filename,
+                caption=f"""
+📄 *{paper.title}*
+👥 *Authors:* {', '.join(str(author) for author in paper.authors[:3])}{'...' if len(paper.authors) > 3 else ''}
+📅 *Published:* {paper.published.strftime('%Y-%m-%d')}
+🔗 *Original URL:* [arXiv:{paper_id}]({paper.pdf_url})
+                """,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🌟 Rate This Paper", callback_data=f"rate_{paper_id}")
+                ]])
+            )
+
     except Exception as e:
-        loading_message.edit_text(
-            f"❌ Download failed: {str(e)}\nPlease try again later."
-        )
-        logger.error(f"Download error: {str(e)}")
+        error_msg = f"""
+❌ *Download Failed*
+_But don't worry! You can still access the paper:_
+
+🔗 [Direct PDF Link]({paper.pdf_url})
+📄 [Abstract Page](https://arxiv.org/abs/{paper_id})
+
+_Error details:_ `{str(e)}`
+"""
+        try:
+            loading_message.edit_text(
+                error_msg,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+        except:
+            query.message.reply_text(
+                error_msg,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+        logger.error(f"Paper download error for {paper_id}: {str(e)}")
 
 def chat_about_paper(update: Update, context: CallbackContext) -> None:
     # Check if we're expecting a keyword or journal name
@@ -866,16 +1140,22 @@ def get_latest_papers(update: Update, context: CallbackContext) -> None:
     loading_message = update.message.reply_text("🔄 Fetching latest papers... Please wait...")
 
     try:
+        # Use a date-based query for the last week
+        from datetime import datetime, timedelta
+        last_week = datetime.now() - timedelta(days=7)
+        date_query = f"submittedDate:[{last_week.strftime('%Y%m%d')}0000 TO 999999999999]"
+
         search = arxiv.Search(
-            query="*",
+            query=date_query,
             max_results=5,
-            sort_by=arxiv.SortCriterion.SubmittedDate
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending
         )
 
         results = list(search.results())
 
         if not results:
-            loading_message.edit_text("❌ Could not fetch latest papers.")
+            loading_message.edit_text("❌ Could not fetch latest papers. Please try again later.")
             return
 
         context.user_data['search_state'] = {
@@ -1955,9 +2235,6 @@ def main() -> None:
     updater = Updater(TOKEN)
     dp = updater.dispatcher
 
-    global execute_search
-    __all__ = ['execute_search']
-
     advanced_search_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(show_advanced_search_menu, pattern='^advanced_search$')
@@ -1965,7 +2242,7 @@ def main() -> None:
         states={
             CHOOSING_FILTER: [
                 CallbackQueryHandler(handle_filter_selection, pattern='^filter_'),
-                CallbackQueryHandler(handle_filter_execute, pattern='^filter_execute$'),
+                CallbackQueryHandler(handle_filter_execute, pattern='^execute_search$'),
                 CallbackQueryHandler(show_advanced_search_menu, pattern='^back_to_filters$')
             ],
             ENTER_DATE_FROM: [
@@ -1997,6 +2274,11 @@ def main() -> None:
 
     dp.add_handler(advanced_search_handler, group=1)
 
+    dp.add_handler(CallbackQueryHandler(
+        handle_advanced_category_toggle,
+        pattern="^adv_cat_"
+    ), group=2)
+
     notification_handler = MessageHandler(
         Filters.text & ~Filters.command & Filters.chat_type.private,
         handle_notification_keyword
@@ -2008,7 +2290,14 @@ def main() -> None:
     preferences_manager = UserPreferences()
     dp.bot_data['preferences_manager'] = preferences_manager
 
+    admin_manager = AdminManager()
+    dp.bot_data['admin_manager'] = admin_manager
+
+    dp.add_handler(CommandHandler("admin", admin_command))
+    dp.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^admin_"))
+
     voice_handler = VoiceSearchHandler()
+    dp.bot_data['chat_handler'] = ChatHandler()
 
     # Add command handlers
     dp.add_handler(CommandHandler("start", start), group=2)
@@ -2021,6 +2310,9 @@ def main() -> None:
     dp.add_handler(CommandHandler("settings", settings_command), group=2)
     dp.add_handler(CommandHandler("notifications", setup_notifications), group=2)
     dp.add_handler(CommandHandler("notifications", show_notifications_menu), group=2)
+    dp.add_handler(CommandHandler("model", model_command))
+    dp.add_handler(CallbackQueryHandler(model_command, pattern="^back_to_models$"))
+    dp.add_handler(CallbackQueryHandler(handle_model_selection, pattern="^model_"))
 
     # Add callback handlers
     dp.add_handler(CallbackQueryHandler(handle_notification_callback))
@@ -2038,6 +2330,32 @@ def main() -> None:
     dp.add_handler(CallbackQueryHandler(handle_category_field, pattern="^category_field_"), group=2)
     dp.add_handler(CallbackQueryHandler(handle_category_toggle, pattern="^toggle_category_"), group=2)
     dp.add_handler(CallbackQueryHandler(handle_notification_callback, pattern="^keyword_"), group=2)
+
+
+    dp.add_handler(CallbackQueryHandler(end_chat_command, pattern="^end_chat$"))
+
+    # Add chat handlers
+    dp.add_handler(CommandHandler("chat", chat_command))
+    dp.add_handler(CommandHandler("endchat", end_chat_command))
+    dp.add_handler(CallbackQueryHandler(end_chat_command, pattern="^end_chat$"), group=2)
+
+    dp.add_handler(MessageHandler(
+        Filters.text & ~Filters.command & (
+            Filters.regex(r'expecting_restriction') |
+            Filters.regex(r'expecting_block') |
+            Filters.regex(r'expecting_unrestrict') |
+            Filters.regex(r'expecting_admin_add') |
+            Filters.regex(r'expecting_admin_remove')
+        ),
+        handle_restriction_input
+    ))
+
+
+    # Add chat message handler with lower priority than other handlers
+    dp.add_handler(MessageHandler(
+        Filters.text & ~Filters.command & Filters.chat_type.private,
+        handle_chat_message
+    ), group=5)  # Higher group number means lower priority
 
     dp.add_handler(CallbackQueryHandler(
         handle_search_options,
